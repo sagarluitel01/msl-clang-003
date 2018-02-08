@@ -126,7 +126,7 @@ alloc_status mem_free() {
         return ALLOC_CALLED_AGAIN;
     }
     // make sure all pool managers have been deallocated
-    for (int i = 0; i < pool_store_size; i++) {
+    for (int i = 0; i < pool_store_capacity; i++) {
         if (pool_store[i] != NULL) {
             return ALLOC_FAIL;
         }
@@ -148,47 +148,126 @@ pool_pt mem_pool_open(size_t size, alloc_policy policy) {
     }
     // expand the pool store, if necessary
     // allocate a new mem pool mgr
-    pool_store[0] = (pool_mgr_t*) malloc(0 * sizeof(pool_mgr_t));
-    pool_store[0] = (pool_pt*) malloc(100000);
+    pool_store[pool_store_size] = (pool_mgr_t*) calloc(1, sizeof(pool_mgr_t));
+    pool_store[pool_store_size]->pool.mem = calloc(1, size);
     // check success, on error return null
+    if(pool_store[pool_store_size]->pool.mem == NULL)
+    {
+        return NULL;
+    }
     // allocate a new memory pool
+
     // check success, on error deallocate mgr and return null
+
     // allocate a new node heap
+    pool_store[pool_store_size]->node_heap = calloc(1, sizeof(node_t));
     // check success, on error deallocate mgr/pool and return null
+    if(pool_store[pool_store_size]->node_heap == NULL)
+    {
+        free(pool_store[pool_store_size]->pool.mem);
+        return NULL;
+    }
     // allocate a new gap index
+    pool_store[pool_store_size]->gap_ix = calloc(1, sizeof(gap_t));
     // check success, on error deallocate mgr/pool/heap and return null
+    if(pool_store[pool_store_size]->gap_ix == NULL)
+    {
+        free(pool_store[0]->pool.mem);
+        free(pool_store[0]->node_heap);
+        return NULL;
+    }
+
     // assign all the pointers and update meta data:
     //   initialize top node of node heap
+    pool_store[pool_store_size]->node_heap->alloc_record.mem = pool_store[pool_store_size]->pool.mem;
     //   initialize top node of gap index
+    pool_store[pool_store_size]->gap_ix->node = pool_store[pool_store_size]->node_heap;
+    pool_store[pool_store_size]->gap_ix->node->alloc_record.size = size;
+
     //   initialize pool mgr
     //   link pool mgr to pool store
-    // return the address of the mgr, cast to (pool_pt)
 
-    return NULL;
+    pool_store[pool_store_size]->pool.policy = policy;
+    pool_store[pool_store_size]->pool.total_size = size;
+    pool_store[pool_store_size]->pool.alloc_size = 0;
+    pool_store[pool_store_size]->pool.num_allocs = 0;
+    pool_store[pool_store_size]->pool.num_gaps = 1;
+
+    // return the address of the mgr, cast to (pool_pt)
+    pool_mgr_pt newpool = pool_store[pool_store_size];
+    pool_store_size++;
+
+    return (pool_pt) newpool;
 }
 
 alloc_status mem_pool_close(pool_pt pool) {
     // get mgr from pool by casting the pointer to (pool_mgr_pt)
+    pool_mgr_pt mangr = (pool_mgr_pt) pool;
     // check if this pool is allocated
+    if(mangr == NULL)
+    {
+        return ALLOC_NOT_FREED;
+    }
     // check if pool has only one gap
+    if(pool->num_gaps > 1)
+    {
+        return ALLOC_FAIL;
+    }
     // check if it has zero allocations
+    if(pool->num_allocs > 0)
+    {
+        return ALLOC_NOT_FREED;
+    }
     // free memory pool
+    free(pool->mem);
     // free node heap
+    free(mangr->node_heap);
     // free gap index
+    free(mangr->gap_ix);
     // find mgr in pool store and set to null
+    for(int i = 0; i < pool_store_capacity; i++)
+    {
+        if(pool_store[i] == mangr) {
+            pool_store[i] = NULL;
+            break;
+        }
+    }
     // note: don't decrement pool_store_size, because it only grows
-    // free mgr
 
-    return ALLOC_FAIL;
+    // free mgr
+    free(mangr);
+
+    return ALLOC_OK;
 }
 
 void * mem_new_alloc(pool_pt pool, size_t size) {
     // get mgr from pool by casting the pointer to (pool_mgr_pt)
+    pool_mgr_pt mangr = (pool_mgr_pt) pool;
+
     // check if any gaps, return null if none
+    if(pool->num_gaps == 0)
+    {
+        return NULL;
+    }
+
     // expand heap node, if necessary, quit on error
+    _mem_resize_node_heap(mangr);
+
     // check used nodes fewer than total nodes, quit on error
+    if(mangr->node_heap->used <= mangr->total_nodes)
+    {
+        return ALLOC_OK;
+    }
+
     // get a node for allocation:
+    pool_pt newNode = NULL;
+
     // if FIRST_FIT, then find the first sufficient node in the node heap
+    if(pool->policy == FIRST_FIT)
+    {
+        
+    }
+
     // if BEST_FIT, then find the first sufficient node in the gap index
     // check if node found
     // update metadata (num_allocs, alloc_size)
