@@ -245,48 +245,46 @@ void * mem_new_alloc(pool_pt pool, size_t size) {
     pool_mgr_pt mangr = (pool_mgr_pt) pool;
 
     // check if any gaps, return null if none
-    if(mangr->pool.num_gaps == 0)
+    if(mangr->gap_ix == NULL)
     {
         return NULL;
     }
 
     // expand heap node, if necessary, quit on error
-    _mem_resize_node_heap(mangr);
+   // _mem_resize_node_heap(mangr);
 
     // check used nodes fewer than total nodes, quit on error
-    if(mangr->node_heap->used <= mangr->total_nodes)
+  /*  if(mangr->node_heap->used <= mangr->total_nodes)
     {
         return NULL;
-    }
+    }*/
 
     // get a node for allocation:
     node_pt newNode = NULL;
 
     // if FIRST_FIT, then find the first sufficient node in the node heap
+    int i = 0;
     if(mangr->pool.policy == FIRST_FIT)
     {
-        newNode = mangr->node_heap;
-        while(newNode->alloc_record.size >= size || newNode->allocated == 1)
+        while(mangr->node_heap[i].alloc_record.size < size && mangr->node_heap[i].allocated == 0)
         {
-            newNode = newNode->next;
+            i++;
         }
-
+        newNode = &mangr->node_heap[i];
     }
 
     // if BEST_FIT, then find the first sufficient node in the gap index
     else if(mangr->pool.policy == BEST_FIT)
     {
-        for (int i = 0; i < mangr->gap_ix_capacity; ++i) {
-            if(mangr->gap_ix[i].size >= size)
-            {
-                newNode = mangr->gap_ix[i].node;
-                break;
-            }
+        while(mangr->gap_ix[i].size < size)
+        {
+            i++;
         }
+        newNode = mangr->gap_ix[i].node;
     }
 
     // check if node found
-    if(newNode->alloc_record.size < size)
+    if(mangr->node_heap[i].alloc_record.size < size)
     {
         return NULL;
     }
@@ -296,55 +294,51 @@ void * mem_new_alloc(pool_pt pool, size_t size) {
     mangr->pool.alloc_size += size;
 
     // calculate the size of the remaining gap, if any
-    size_t reman_gap = newNode->alloc_record.size - size;
+    size_t reman_gap = mangr->node_heap[i].alloc_record.size - size;
 
     // remove node from gap index
     _mem_remove_from_gap_ix(mangr, size, newNode);
 
     // convert gap_node to an allocation node of given size
-    mangr->pool.num_allocs++;
-    mangr->pool.alloc_size += size;
+    mangr->node_heap[i].alloc_record.size = size;
+    mangr->node_heap[i].allocated = 1;
 
     // adjust node heap:
     //   if remaining gap, need a new node
     if(reman_gap != 0) {
-        node_pt node = NULL;
+        int a = 0;
         //   find an unused one in the node heap
-        for(int i = 0; i < mangr->total_nodes; i++) {
-            if (mangr->node_heap[i].used == 0) {
-                node = &mangr->node_heap[i];
-                break;
-            }
+        while (mangr->node_heap[a].used != 0)
+        {
+            ++a;
         }
         //   make sure one was found
-        if(node == NULL)
-        {
-            return NULL;
-        }
+
 
         //   initialize it to a gap node
-        node->alloc_record.size = reman_gap;
-        node->alloc_record.mem = newNode->alloc_record.mem + size;
-        node->used = 1;
 
-        //   update metadata (used_nodes)
+        //mangr->node_heap[a].alloc_record.mem = newNode->alloc_record.mem + size;
+        mangr->node_heap[a].allocated = 0;
+        mangr->node_heap[a].used = 1;
+        mangr->node_heap[a].alloc_record.size = reman_gap;
         mangr->used_nodes++;
+        //   update metadata (used_nodes)
+
         //   update linked list (new node right after the node for allocation)
-        node->prev = newNode;
-        node->next = newNode->next;
+        node_pt  temp = newNode->next;
+        newNode->next = &mangr->node_heap[a];
+        mangr->node_heap[a].prev = newNode;
+        mangr->node_heap[a].next = temp;
 
         //   add to gap index
-        _mem_add_to_gap_ix(mangr, reman_gap, node);
+        _mem_add_to_gap_ix(mangr, reman_gap, &mangr->node_heap[a]);
 
         //   check if successful
-        if(mangr->gap_ix != NULL)
-        {
-            return NULL;
-        }
+
     }
     // return allocation record by casting the node to (alloc_pt)
 
-    return (alloc_pt)newNode;
+    return (alloc_pt) newNode;
 }
 
 alloc_status mem_del_alloc(pool_pt pool, void * alloc) {
@@ -355,8 +349,8 @@ alloc_status mem_del_alloc(pool_pt pool, void * alloc) {
     node_pt newNode = (node_pt) alloc;
 
     // find the node in the node heap
-    int i = 0;
-    while(&mangr->node_heap[i] != newNode)
+  /*  int i = 0;
+    while(&mangr->node_heap[i] != NULL)
     {
         ++i;
     }
@@ -368,6 +362,7 @@ alloc_status mem_del_alloc(pool_pt pool, void * alloc) {
     {
         return ALLOC_NOT_FREED;
     }
+    */
     // convert to gap node
     newNode->allocated = 0;
 
@@ -375,10 +370,12 @@ alloc_status mem_del_alloc(pool_pt pool, void * alloc) {
     mangr->pool.num_allocs --;
     mangr->pool.alloc_size -= newNode->alloc_record.size;
     // if the next node in the list is also a gap, merge into node-to-delete
-    if(newNode->next == NULL)
+
+    if(newNode->next != NULL && newNode->next->allocated == 0)
     {
         //   remove the next node from gap index
-        _mem_remove_from_gap_ix(mangr, newNode->next->alloc_record.size, newNode->next);
+        _mem_remove_from_gap_ix(mangr,  newNode->next->alloc_record.size, newNode->next);
+        newNode->alloc_record.size += newNode->alloc_record.size;
         //   check success
 
         //   add the size to the node-to-delete
@@ -393,7 +390,7 @@ alloc_status mem_del_alloc(pool_pt pool, void * alloc) {
         mangr->used_nodes --;
         //   update linked list:
 
-        if (newNode->next->next != NULL) {
+        if (newNode->next->next) {
             newNode->next->next->prev = newNode;
             newNode->next = newNode->next->next;
         }
@@ -406,7 +403,7 @@ alloc_status mem_del_alloc(pool_pt pool, void * alloc) {
     // this merged node-to-delete might need to be added to the gap index
     // but one more thing to check...
     // if the previous node in the list is also a gap, merge into previous!
-    if(newNode->prev->allocated == 0 )
+    if(newNode->prev && newNode->prev->allocated == 0)
     {
         node_pt prev_n = newNode->prev;
         //   remove the previous node from gap index
@@ -428,7 +425,7 @@ alloc_status mem_del_alloc(pool_pt pool, void * alloc) {
 
         //   update linked list
 
-        if (newNode->next == NULL) {
+        if (newNode->next ) {
             prev_n->next = newNode->next;
             newNode->next->prev = prev_n;
         }
@@ -461,6 +458,7 @@ void mem_inspect_pool(pool_pt pool,
     // check successful
     if(segment == NULL)
     {
+        *segments = NULL;
         return;
     }
 
@@ -472,6 +470,7 @@ void mem_inspect_pool(pool_pt pool,
     int i = 0;
     while (node != NULL)
     {
+
         segment[i].size = node->alloc_record.size;
         segment[i].allocated = node->allocated;
         node = node->next;
@@ -500,15 +499,20 @@ static alloc_status _mem_resize_pool_store() {
         pool_store = (pool_mgr_pt*) realloc(pool_store, a* sizeof(pool_mgr_pt));
         pool_store_capacity = a;
     }
-    // don't forget to update capacity variables
 
-    return ALLOC_FAIL;
+
+    return ALLOC_OK;
 }
 
 static alloc_status _mem_resize_node_heap(pool_mgr_pt pool_mgr) {
-    // see above
+    if (((float) pool_mgr->used_nodes / pool_mgr->total_nodes)
+        > MEM_POOL_STORE_FILL_FACTOR) {
+        unsigned a = MEM_POOL_STORE_EXPAND_FACTOR * pool_mgr->total_nodes;
+        pool_mgr->node_heap = realloc(pool_mgr->node_heap, a * sizeof(pool_t));
+        pool_mgr->total_nodes = a;
+    }
 
-    return ALLOC_FAIL;
+    return ALLOC_OK;
 }
 
 static alloc_status _mem_resize_gap_ix(pool_mgr_pt pool_mgr) {
@@ -522,7 +526,11 @@ static alloc_status _mem_add_to_gap_ix(pool_mgr_pt pool_mgr,
                                        node_pt node) {
 
     // expand the gap index, if necessary (call the function)
+    _mem_resize_gap_ix(pool_mgr);
+
     // add the entry at the end
+    
+
     // update metadata (num_gaps)
     // sort the gap index (call the function)
     // check success
